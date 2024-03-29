@@ -326,6 +326,15 @@ class IExecutionProvider {
    */
   virtual std::vector<AllocatorPtr> CreatePreferredAllocators() { return std::vector<AllocatorPtr>(); };
 
+  /**
+   * Get the array of pointers for EPContext nodes
+   * EP needs to implement this if has the requirement to generate the context cache model. Otherwise leave it.
+   * Default return an empty vector if not provided by the Execution Provider
+   */
+  virtual const InlinedVector<const Node*> GetEpContextNodes() const {
+    return InlinedVector<const Node*>();
+  }
+
   virtual common::Status MakeResident() { return Status::OK(); };
   virtual common::Status Evict() { return Status::OK(); };
 

@@ -26,6 +26,8 @@ static const std::string kDLACore = "ORT_TENSORRT_DLA_CORE";
 static const std::string kDumpSubgraphs = "ORT_TENSORRT_DUMP_SUBGRAPHS";
 static const std::string kEngineCacheEnable = "ORT_TENSORRT_ENGINE_CACHE_ENABLE";
 static const std::string kCachePath = "ORT_TENSORRT_CACHE_PATH";
+// As a timing cache can be used across multiple ONNX files it makes sense to have a seperate cache path
+static const std::string kTimingCachePath = "ORT_TENSORRT_GLOBAL_CACHE_PATH";
 static const std::string kDecryptionEnable = "ORT_TENSORRT_ENGINE_DECRYPTION_ENABLE";
 static const std::string kDecryptionLibPath = "ORT_TENSORRT_ENGINE_DECRYPTION_LIB_PATH";
 static const std::string kForceSequentialEngineBuild = "ORT_TENSORRT_FORCE_SEQUENTIAL_ENGINE_BUILD";
@@ -44,6 +46,10 @@ static const std::string kProfilesMinShapes = "ORT_TENSORRT_PROFILE_MIN_SHAPES";
 static const std::string kProfilesMaxShapes = "ORT_TENSORRT_PROFILE_MAX_SHAPES";
 static const std::string kProfilesOptShapes = "ORT_TENSORRT_PROFILE_OPT_SHAPES";
 static const std::string kCudaGraphEnable = "ORT_TENSORRT_CUDA_GRAPH_ENABLE";
+static const std::string kDumpEpContextModel = "ORT_DUMP_EP_CONTEXT_MODEL";
+static const std::string kEpContextEmbedMode = "ORT_EP_CONTEXT_EMBED_MODE";
+static const std::string kEpContextComputeCapabilityEnable = "ORT_EP_CONTEXT_COMPUTE_CAPABILITY_ENABLE";
+static const std::string kEngineCachePrefix = "ORT_TENSORRT_CACHE_PREFIX";
 // Old env variable for backward compatibility
 static const std::string kEngineCachePath = "ORT_TENSORRT_ENGINE_CACHE_PATH";
 }  // namespace tensorrt_env_vars
@@ -86,7 +92,7 @@ struct TensorrtInferDeleter {
   template <typename T>
   void operator()(T* obj) const {
     if (obj) {
-      obj->destroy();
+      delete obj;
     }
   }
 };
@@ -94,6 +100,38 @@ struct TensorrtInferDeleter {
 template <typename T>
 using unique_pointer = std::unique_ptr<T, TensorrtInferDeleter>;
 };  // namespace tensorrt_ptr
+
+//
+// Class to allocate memory for outputs with data-dependent shapes. The sizes of those are unknown so pre-allocation is
+// not possible.
+//
+class OutputAllocator : public nvinfer1::IOutputAllocator {
+ public:
+  void* reallocateOutput(char const* tensorName, void* currentMemory, uint64_t size, uint64_t alignment) noexcept override;
+
+  void notifyShape(char const* tensorName, nvinfer1::Dims const& dims) noexcept override;
+
+  void* getBuffer() {
+    return outputPtr;
+  }
+
+  std::vector<int64_t>& getOutputShape() {
+    return output_shapes;
+  }
+
+  uint64_t getSize() {
+    return allocated_size;
+  }
+
+  ~OutputAllocator() override {
+    cudaFree(outputPtr);
+  }
+
+ private:
+  void* outputPtr{nullptr};
+  uint64_t allocated_size = 0;
+  std::vector<int64_t> output_shapes;
+};
 
 using ShapeRangesMap = std::unordered_map<std::string, std::unordered_map<size_t, std::vector<std::vector<int64_t>>>>;
 
@@ -103,15 +141,14 @@ struct TensorrtFuncState {
   DestroyFunc test_release_func = nullptr;
   AllocatorHandle allocator = nullptr;
   std::string fused_node_name;
+  nvinfer1::IBuilder* builder;
   tensorrt_ptr::unique_pointer<nvonnxparser::IParser>* parser = nullptr;
   std::unique_ptr<nvinfer1::ICudaEngine>* engine = nullptr;
   std::unique_ptr<nvinfer1::IExecutionContext>* context = nullptr;
-  std::unique_ptr<nvinfer1::IBuilder>* builder = nullptr;
   std::unique_ptr<nvinfer1::INetworkDefinition>* network = nullptr;
   std::vector<std::unordered_map<std::string, size_t>> input_info;
   std::vector<std::unordered_map<std::string, size_t>> output_info;
   std::unordered_map<std::string, std::unordered_map<size_t, std::vector<std::vector<int64_t>>>> input_shape_ranges;
-  bool sync_stream_after_enqueue = false;
   OrtMutex* tensorrt_mu_ptr = nullptr;
   bool fp16_enable = false;
   bool int8_enable = false;
@@ -131,6 +168,7 @@ struct TensorrtFuncState {
   int (*engine_decryption)(const char*, char*, size_t*) = nullptr;
   int (*engine_encryption)(const char*, char*, size_t) = nullptr;
   bool timing_cache_enable = true;
+  std::string timing_cache_path;
   bool force_timing_cache = false;
   bool detailed_build_log = false;
   bool build_heuristics_enable = false;
@@ -140,6 +178,23 @@ struct TensorrtFuncState {
   bool filter_tactic_sources = false;
   nvinfer1::TacticSources tactic_sources;
   bool cuda_graph_enable = 0;
+  std::string cache_prefix;
+  std::string cache_suffix;
+};
+
+// Minimum information to construct kernel function state for direct engine load code path
+struct TensorrtShortFuncState {
+  AllocateFunc test_allocate_func = nullptr;
+  DestroyFunc test_release_func = nullptr;
+  AllocatorHandle allocator = nullptr;
+  std::string fused_node_name;
+  std::unique_ptr<nvinfer1::ICudaEngine>* engine = nullptr;
+  std::unique_ptr<nvinfer1::IExecutionContext>* context = nullptr;
+  std::vector<std::unordered_map<std::string, size_t>> input_info;
+  std::vector<std::unordered_map<std::string, size_t>> output_info;
+  bool context_memory_sharing_enable = false;
+  size_t* max_context_mem_size_ptr = nullptr;
+  OrtMutex* tensorrt_mu_ptr = nullptr;
 };
 
 // Holds important information for building valid ORT graph.
@@ -150,6 +205,7 @@ struct SubGraphContext {
 };
 
 using SubGraphContextMap = std::unordered_map<std::string, std::unique_ptr<SubGraphContext>>;
+using DDSOutputAllocatorMap = std::unordered_map<std::string, std::unique_ptr<OutputAllocator>>;
 
 // Logical device representation.
 class TensorrtExecutionProvider : public IExecutionProvider {
@@ -197,7 +253,7 @@ class TensorrtExecutionProvider : public IExecutionProvider {
   Status ReplayGraph() override;
 
  private:
-  TensorrtExecutionProviderInfo info_;
+  mutable TensorrtExecutionProviderInfo info_;
   bool external_stream_ = false;
   cudaStream_t stream_ = nullptr;
   int max_partition_iterations_ = 1000;
@@ -218,10 +274,11 @@ class TensorrtExecutionProvider : public IExecutionProvider {
   int builder_optimization_level_ = 3;
   int auxiliary_streams_ = -1;
   std::string tactic_sources_;
-  std::string cache_path_, engine_decryption_lib_path_;
+  std::string global_cache_path_, cache_path_, engine_decryption_lib_path_;
   std::unique_ptr<nvinfer1::IRuntime> runtime_ = nullptr;
   OrtMutex tensorrt_mu_;
   int device_id_;
+  std::string compute_capability_;
   bool context_memory_sharing_enable_ = false;
   bool layer_norm_fp32_fallback_ = false;
   size_t max_ctx_mem_size_ = 0;
@@ -234,13 +291,25 @@ class TensorrtExecutionProvider : public IExecutionProvider {
   bool force_timing_cache_match_ = false;
   bool detailed_build_log_ = false;
   bool cuda_graph_enable_ = false;
+  std::string cache_prefix_;
 
   // The OrtAllocator object will be get during ep compute time
   // and should be kept for the lifetime of TRT EP object.
   OrtAllocator* alloc_ = nullptr;
 
+  // For create/dump EP context node model
+  bool dump_ep_context_model_ = false;
+  std::string ep_context_file_path_;
+  int ep_context_embed_mode_ = 0;
+  std::string ctx_model_path_;
+  std::string ep_cache_context_attr_;
+  std::string engine_cache_relative_path_to_context_model_dir;
+  std::unique_ptr<ONNX_NAMESPACE::ModelProto> model_proto_ = ONNX_NAMESPACE::ModelProto::Create();
+
   std::unordered_set<std::string> control_flow_op_set_ = {"If", "Loop", "Scan"};
   mutable std::unordered_map<std::string, std::unique_ptr<SubGraphContext>> subgraph_context_map_;
+
+  mutable std::unique_ptr<nvinfer1::IBuilder> builder_;
 
   // Following maps that hold TRT objects will be accessible by different threads if ORT is using multithreading.
   // In general, TensorRT objects are not thread safe; accesses to an object from different threads must be serialized by the client.
@@ -258,13 +327,14 @@ class TensorrtExecutionProvider : public IExecutionProvider {
   std::unordered_map<std::string, std::vector<std::vector<int64_t>>> profile_opt_shapes_;
   std::unordered_map<std::string, ShapeRangesMap> input_shape_ranges_;  // The profile shape ranges that the engine is built with
   std::unordered_map<std::string, std::vector<nvinfer1::IOptimizationProfile*>> profiles_;
+  std::unordered_map<std::string, DDSOutputAllocatorMap> dds_output_allocator_maps_;
 
   // for external stream, we need to create its cudnn/cublass handle before cuda EP enable cuda graph capture
   cudnnHandle_t external_cudnn_handle_ = nullptr;
   cublasHandle_t external_cublas_handle_ = nullptr;
 
-  // Call cudaStreamSynchronize() after TRT enqueueV2()/enqueueV3()
-  mutable bool sync_stream_after_enqueue_ = false;
+  // Call cudaStreamSynchronize() after TRT enqueueV3()
+  mutable bool sync_stream_after_enqueue_ = true;
 
   CUDAGraph cuda_graph_;
   bool is_graph_captured_ = false;
@@ -449,9 +519,34 @@ class TensorrtExecutionProvider : public IExecutionProvider {
    */
   bool IsLocalValue(const Graph& graph, const std::string& name) const;
 
+  /**
+   * Create a vector of NodeComputeInfo instances directly from "TRT engine" wrapped onnx model without
+   * going through the time-consuming processes of model parsing and engine building.
+   */
+  Status CreateNodeComputeInfoFromPrecompiledEngine(const GraphViewer& graph_body_viewer,
+                                                    const Node& fused_node,
+                                                    std::unordered_map<std::string, size_t>& input_map,
+                                                    std::unordered_map<std::string, size_t>& output_map,
+                                                    std::vector<NodeComputeInfo>& node_compute_funcs);
+
+  /**
+   * Create a vector of NodeComputeInfo instances from graph.
+   */
+  Status CreateNodeComputeInfoFromGraph(const GraphViewer& graph_body_viewer,
+                                        const Node& fused_node,
+                                        std::unordered_map<std::string, size_t>& input_map,
+                                        std::unordered_map<std::string, size_t>& output_map,
+                                        std::vector<NodeComputeInfo>& node_compute_funcs);
+
   bool IsGraphCaptureAllowed() const;
   void CaptureBegin();
   void CaptureEnd();
   void IncrementRegularRunCountBeforeGraphCapture();
+
+  /**
+   * Get the pointer to the IBuilder instance.
+   * This function only creates the instance at the first time it's being called."
+   */
+  nvinfer1::IBuilder* GetBuilder() const;
 };
 }  // namespace onnxruntime

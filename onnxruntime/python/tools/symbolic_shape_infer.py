@@ -147,13 +147,17 @@ class SymbolicShapeInference:
             "GatherElements": self._infer_GatherElements,
             "GatherND": self._infer_GatherND,
             "Identity": self._pass_on_shape_and_type,
+            "AllReduce": self._pass_on_shape_and_type,
             "If": self._infer_If,
             "Loop": self._infer_Loop,
             "MatMul": self._infer_MatMul,
             "MatMulInteger16": self._infer_MatMulInteger,
             "MaxPool": self._infer_Pool,
             "Max": self._infer_symbolic_compute_ops,
+            "MemcpyFromHost": self._pass_on_shape_and_type,
+            "MemcpyToHost": self._pass_on_shape_and_type,
             "Min": self._infer_symbolic_compute_ops,
+            "MoE": self._pass_on_shape_and_type,
             "Mul": self._infer_symbolic_compute_ops,
             "NonMaxSuppression": self._infer_NonMaxSuppression,
             "NonZero": self._infer_NonZero,
@@ -193,12 +197,15 @@ class SymbolicShapeInference:
             "BiasGelu": self._infer_BiasGelu,
             "BiasSplitGelu": self._infer_BiasSplitGelu,
             "DecoderMaskedMultiHeadAttention": self._infer_DecoderMaskedMultiHeadAttention,
+            "DequantizeLinear": self._infer_DequantizeLinear,
             "EmbedLayerNormalization": self._infer_EmbedLayerNormalization,
             "FastGelu": self._infer_FastGelu,
             "GatedRelativePositionBias": self._infer_GatedRelativePositionBias,
             "Gelu": self._infer_Gelu,
             "GemmFastGelu": self._infer_GemmFastGelu,
+            "GemmFloat8": self._infer_GemmFloat8,
             "GroupNorm": self._infer_GroupNorm,
+            "SkipGroupNorm": self._infer_SkipGroupNorm,
             "LayerNormalization": self._infer_LayerNormalization,
             "LongformerAttention": self._infer_LongformerAttention,
             "MultiHeadAttention": self._infer_MultiHeadAttention,
@@ -206,9 +213,12 @@ class SymbolicShapeInference:
             "PackedAttention": self._infer_PackedAttention,
             "PackedMultiHeadAttention": self._infer_PackedMultiHeadAttention,
             "PythonOp": self._infer_PythonOp,
+            "QuantizeLinear": self._infer_QuantizeLinear,
+            "QuickGelu": self._infer_FastGelu,
             "RelativePositionBias": self._infer_RelativePositionBias,
             "RemovePadding": self._infer_RemovePadding,
             "RestorePadding": self._infer_RestorePadding,
+            "RotaryEmbedding": self._infer_RotaryEmbedding,
             "SimplifiedLayerNormalization": self._infer_LayerNormalization,
             "SkipLayerNormalization": self._infer_SkipLayerNormalization,
             "SkipSimplifiedLayerNormalization": self._infer_SkipLayerNormalization,
@@ -230,6 +240,7 @@ class SymbolicShapeInference:
             "upsample_nearest1d": self._infer_aten_upsample,
             "upsample_nearest2d": self._infer_aten_upsample,
             "upsample_nearest3d": self._infer_aten_upsample,
+            "upsample_bicubic2d": self._infer_aten_upsample,
         }
         self.run_ = True
         self.suggested_merge_ = {}
@@ -449,6 +460,8 @@ class SymbolicShapeInference:
             "GemmFastGelu",
             "LayerNormalization",
             "LongformerAttention",
+            "DequantizeLinear",
+            "QuantizeLinear",
             "RelativePositionBias",
             "RemovePadding",
             "RestorePadding",
@@ -459,9 +472,12 @@ class SymbolicShapeInference:
             "PythonOp",
             "MultiHeadAttention",
             "GroupNorm",
+            "SkipGroupNorm",
             "BiasSplitGelu",
             "BiasAdd",
             "NhwcConv",
+            "QuickGelu",
+            "RotaryEmbedding",
         ]
 
         if not skip_infer:
@@ -967,6 +983,29 @@ class SymbolicShapeInference:
                 get_shape_from_sympy_shape(sympy_shape),
             )
         )
+
+    def _infer_DequantizeLinear(self, node):  # noqa: N802
+        # Get the output data type from the scale input (index 1, required).
+        output_dtype = self.known_vi_[node.input[1]].type.tensor_type.elem_type
+
+        # Get the output shape from the first input.
+        output_shape = self._get_shape(node, 0)
+
+        vi = self.known_vi_[node.output[0]]
+        vi.CopyFrom(helper.make_tensor_value_info(node.output[0], output_dtype, output_shape))
+
+    def _infer_QuantizeLinear(self, node):  # noqa: N802
+        # Get the output data type from the zero-point input (index 2, optional).
+        # Otherwise, default to uint8
+        output_dtype = onnx.TensorProto.UINT8
+        if len(node.input) > 2 and node.input[2]:
+            output_dtype = self.known_vi_[node.input[2]].type.tensor_type.elem_type
+
+        # Get the output shape from the first input.
+        output_shape = self._get_shape(node, 0)
+
+        vi = self.known_vi_[node.output[0]]
+        vi.CopyFrom(helper.make_tensor_value_info(node.output[0], output_dtype, output_shape))
 
     def _infer_Einsum(self, node):  # noqa: N802
         # ref:https://github.com/onnx/onnx/blob/623dfaa0151b2e4ce49779c3ec31cbd78c592b80/onnx/defs/math/defs.cc#L3275
@@ -2307,7 +2346,13 @@ class SymbolicShapeInference:
     def _infer_Gelu(self, node):  # noqa: N802
         self._propagate_shape_and_type(node)
 
+    def _infer_QuickGelu(self, node):  # noqa: N802
+        self._propagate_shape_and_type(node)
+
     def _infer_GemmFastGelu(self, node):  # noqa: N802
+        self._compute_matmul_shape(node)
+
+    def _infer_GemmFloat8(self, node):  # noqa: N802
         self._compute_matmul_shape(node)
 
     def _infer_LayerNormalization(self, node):  # noqa: N802
@@ -2365,6 +2410,11 @@ class SymbolicShapeInference:
     def _infer_GroupNorm(self, node):  # noqa: N802
         self._propagate_shape_and_type(node)
 
+    def _infer_SkipGroupNorm(self, node):  # noqa: N802
+        self._propagate_shape_and_type(node, 0, 0)
+        if len(node.output) > 1:
+            self._propagate_shape_and_type(node, 0, 1)
+
     def _infer_BiasSplitGelu(self, node):  # noqa: N802
         input_shape = self._get_shape(node, 0)
         bias_shape = self._get_shape(node, 1)
@@ -2378,11 +2428,24 @@ class SymbolicShapeInference:
     def _infer_BiasAdd(self, node):  # noqa: N802
         self._propagate_shape_and_type(node)
 
+    def _infer_RotaryEmbedding(self, node):  # noqa: N802
+        if len(node.output) == 1:
+            self._propagate_shape_and_type(node)
+        elif len(node.output) == 2:
+            # Extraneous constant nodes outputted by RotaryEmbedding function made with `export_modules_as_functions`
+            self._propagate_shape_and_type(node, input_index=1, output_index=0)
+            self._propagate_shape_and_type(node, input_index=0, output_index=1)  # true output
+        elif len(node.output) == 3:
+            # Extraneous constant nodes outputted by RotaryEmbedding function made with `export_modules_as_functions`
+            self._propagate_shape_and_type(node, input_index=1, output_index=0)
+            self._propagate_shape_and_type(node, input_index=1, output_index=1)
+            self._propagate_shape_and_type(node, input_index=0, output_index=2)  # true output
+
     def _infer_PythonOp(self, node):  # noqa: N802
         output_tensor_types = get_attribute(node, "output_tensor_types")
-        assert output_tensor_types
+        assert output_tensor_types, f"PythonOp '{node.name}' has no output_tensor_types attribute."
         output_tensor_ranks = get_attribute(node, "output_tensor_ranks")
-        assert output_tensor_ranks
+        assert output_tensor_ranks, f"PythonOp '{node.name}' has no output_tensor_ranks attribute."
 
         from onnxruntime.capi._pybind_state import get_shape_inference_function
 
@@ -2403,7 +2466,10 @@ class SymbolicShapeInference:
                 input_dtype = self.known_vi_[node.input[input_index]].type.tensor_type.elem_type
                 input_dtypes.append(input_dtype)
             output_shapes, output_dtypes = shape_inferer(node, input_shapes, input_dtypes)
-            assert len(output_shapes) == len(output_dtypes) == (len(node.output) - 1)
+            assert len(output_shapes) == len(output_dtypes) == (len(node.output) - 1), (
+                f"PythonOp '{func_name}' returned {len(output_shapes)} shapes and {len(output_dtypes)} dtypes, "
+                f"but expected {len(node.output) - 1} outputs."
+            )
             for i in range(len(node.output) - 1):
                 output_index = i + 1
                 vi = self.known_vi_[node.output[output_index]]
@@ -2583,11 +2649,18 @@ class SymbolicShapeInference:
                         self._check_merged_dims(in_dims, allow_broadcast=True)
 
             for i_o in range(len(node.output)):
-                # Special case: We do not care about the training related
-                # outputs of SkipLayerNormalization
+                # Special cases:
+                # 1) We do not care about the training related outputs of SkipLayerNormalization
+                # 2) We do not care about the extraneous constant outputs in RotaryEmbedding because
+                # the RotaryEmbedding op created during export can be replaced by the RotaryEmbedding
+                # contrib op
                 if (
                     node.op_type == "SkipLayerNormalization" or node.op_type == "SkipSimplifiedLayerNormalization"
                 ) and i_o in [1, 2]:
+                    continue
+                if node.op_type == "RotaryEmbedding" and len(node.output) > 1:
+                    # Skip symbolic shape inference for RotaryEmbedding functions that have extraneous outputs
+                    # generated by `export_modules_as_functions`
                     continue
 
                 vi = self.known_vi_[node.output[i_o]]
@@ -2750,13 +2823,13 @@ class SymbolicShapeInference:
                             if i in self.known_vi_:
                                 logger.debug(self.known_vi_[i])
                             else:
-                                logger.debug(f"not in knwon_vi_ for {i}")
+                                logger.debug(f"not in known_vi_ for {i}")
                         logger.debug("node outputs:")
                         for o in node.output:
                             if o in self.known_vi_:
                                 logger.debug(self.known_vi_[o])
                             else:
-                                logger.debug(f"not in knwon_vi_ for {o}")
+                                logger.debug(f"not in known_vi_ for {o}")
                         if self.auto_merge_ and not out_type_undefined:
                             logger.debug("Merging: " + str(self.suggested_merge_))
                     return False
