@@ -11,6 +11,8 @@
 
 namespace Dml
 {
+    uint32_t BucketizedBufferAllocator::m_nextId = 0;
+
     AllocationInfo::~AllocationInfo()
     {
         if (m_owner)
@@ -56,7 +58,8 @@ namespace Dml
         m_resourceFlags(resourceFlags),
         m_initialState(initialState),
         m_context(context),
-        m_subAllocator(std::move(subAllocator))
+        m_subAllocator(std::move(subAllocator)),
+        m_id(m_nextId++)
     {
     }
 
@@ -111,6 +114,8 @@ namespace Dml
             bucket = &m_pool[bucketIndex];
             bucketSize = GetBucketSizeFromIndex(bucketIndex);
 
+            OutputDebugString(std::format(L"!!! Pooled heap #{}: allocating {}B\n", m_id, size).c_str());
+
             if (bucket->resources.empty())
             {
                 // No more resources in this bucket - allocate a new one
@@ -123,7 +128,12 @@ namespace Dml
                 resourceWrapper = std::move(bucket->resources.back().resource);
                 resourceId = bucket->resources.back().resourceId;
                 bucket->resources.pop_back();
+
+                m_freePooledData -= GetBucketSizeFromIndex(bucketIndex);
+                ReportCapacity();
             }
+
+            m_usedPooledData += GetBucketSizeFromIndex(bucketIndex);
         }
         else
         {
@@ -131,6 +141,7 @@ namespace Dml
             bucketSize = (size + 3) & ~3;
             resourceWrapper = m_subAllocator->Alloc(onnxruntime::narrow<size_t>(bucketSize));
             resourceId = ++m_currentResourceId;
+            m_unpooledData += size;
         }
 
         assert(resourceWrapper != nullptr);
@@ -183,6 +194,11 @@ namespace Dml
 
             Resource resource = {allocInfo->DetachResourceWrapper(), pooledResourceId};
             bucket->resources.push_back(resource);
+
+            OutputDebugString(std::format(L"!!! Pooled heap #{}: deallocating {}B\n", m_id, allocInfo->GetRequestedSize()).c_str());
+            m_freePooledData += GetBucketSizeFromIndex(bucketIndex);
+            m_usedPooledData -= GetBucketSizeFromIndex(bucketIndex);
+            ReportCapacity();
         }
         else
         {
@@ -193,6 +209,7 @@ namespace Dml
             m_context->QueueReference(allocInfo->GetResource());
 #endif
             allocInfo->DetachResourceWrapper();
+            m_unpooledData -= allocInfo->GetRequestedSize();
         }
 
     #if _DEBUG
@@ -246,6 +263,24 @@ namespace Dml
     void CPUAllocator::Free(void* p)
     {
         return onnxruntime::AllocatorDefaultFree(p);
+    }
+
+    
+    void BucketizedBufferAllocator::ReportCapacity()
+    {
+        std::wstringstream info;
+
+        for (auto i = 0; auto& bucket : m_pool)
+        {
+          if (!bucket.resources.empty())
+          {
+            info << std::format(L", {}: {}MB", i, bucket.resources.size() * GetBucketSizeFromIndex(i) / 1024 / 1024);
+          }
+        
+          i++;
+        }
+
+        OutputDebugString(std::format(L"!!! Pooled heap #{}: {}MB unpooled {}MB used {}MB free{}\n", m_id, m_unpooledData / 1024 / 1024, m_usedPooledData / 1024 / 1024, m_freePooledData / 1024 / 1024, info.str()).c_str());
     }
 
 } // namespace Dml

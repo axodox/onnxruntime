@@ -74,6 +74,9 @@ namespace Dml
         private:
             PooledUploadHeap* m_parent;
         };
+                
+        static uint32_t m_nextId;
+        uint32_t m_id;
 
         // Attempts to find enough unused space in the supplied chunk to accommodate the given allocation size.
         // Returns the offset of that memory if successful, null if there wasn't enough space.
@@ -93,6 +96,8 @@ namespace Dml
 
         std::vector<Chunk> m_chunks; // sorted ascending by capacity (upload heap size)
         size_t m_totalCapacity = 0; // Total size of all chunks, in bytes
+
+        void ReportCapacity();
     };
 
 } // namespace Dml

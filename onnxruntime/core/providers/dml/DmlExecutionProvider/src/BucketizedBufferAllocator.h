@@ -95,10 +95,17 @@ namespace Dml
         std::shared_ptr<ExecutionContext> m_context;
         std::unique_ptr<DmlSubAllocator> m_subAllocator;
 
-    #ifndef NDEBUG
+        static uint32_t m_nextId;
+        uint32_t m_id;
+
+        uint64_t m_unpooledData = 0, m_freePooledData = 0, m_usedPooledData = 0;
+
+    #ifdef _DEBUG
         // Useful for debugging; keeps track of all allocations that haven't been freed yet
         std::map<size_t, AllocationInfo*> m_outstandingAllocationsById;
     #endif
+
+        void ReportCapacity();
     };
 
 } // namespace Dml

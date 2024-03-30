@@ -7,6 +7,8 @@
 
 namespace Dml
 {
+    uint32_t ReadbackHeap::m_nextId = 0;
+
     static ComPtr<ID3D12Resource> CreateReadbackHeap(ID3D12Device* device, size_t size)
     {
         ComPtr<ID3D12Resource> readbackHeap;
@@ -27,6 +29,7 @@ namespace Dml
     ReadbackHeap::ReadbackHeap(ID3D12Device* device, std::shared_ptr<ExecutionContext> executionContext)
         : m_device(device)
         , m_executionContext(std::move(executionContext))
+        , m_id(m_nextId++)
     {
     }
 
@@ -67,6 +70,8 @@ namespace Dml
         }
 
         assert(m_readbackHeap->GetDesc().Width >= size);
+
+        OutputDebugString(std::format(L"!!! Readback heap #{}: {}MB\n", m_id, m_capacity / 1024 / 1024).c_str());
     }
 
     void ReadbackHeap::ReadbackFromGpu(

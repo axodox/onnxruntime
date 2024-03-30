@@ -7,9 +7,12 @@
 
 namespace Dml
 {
+    uint32_t PooledUploadHeap::m_nextId = 0;
+    
     PooledUploadHeap::PooledUploadHeap(ID3D12Device* device, std::shared_ptr<ExecutionContext> executionContext)
         : m_device(device)
         , m_executionContext(std::move(executionContext))
+        , m_id(m_nextId++)
     {
     }
 
@@ -130,6 +133,8 @@ namespace Dml
         m_chunks.push_back(CreateChunk(m_device.Get(), newChunkSize));
         m_totalCapacity += newChunkSize;
 
+        ReportCapacity();
+
         // Allocate from the beginning of the new chunk
         return std::make_pair(&m_chunks.back(), 0);
     }
@@ -213,6 +218,8 @@ namespace Dml
         {
             m_totalCapacity += chunk.capacityInBytes;
         }
+
+        ReportCapacity();
     }
 
     void PooledUploadHeap::AssertInvariants()
@@ -279,5 +286,10 @@ namespace Dml
         assert(calculatedCapacity == m_totalCapacity);
 
     #endif // #ifdef _DEBUG
+    }
+
+    void PooledUploadHeap::ReportCapacity()
+    {
+        OutputDebugString(std::format(L"!!! Upload heap #{}: {}MB\n", m_id, m_totalCapacity / 1024 / 1024).c_str());
     }
 } // namespace Dml

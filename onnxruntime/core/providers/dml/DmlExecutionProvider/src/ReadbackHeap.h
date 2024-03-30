@@ -34,6 +34,9 @@ namespace Dml
 
         static constexpr size_t c_initialCapacity = 1024 * 1024; // 1MB
 
+        static uint32_t m_nextId;
+        uint32_t m_id;
+
         ComPtr<ID3D12Device> m_device;
         std::shared_ptr<ExecutionContext> m_executionContext;
 

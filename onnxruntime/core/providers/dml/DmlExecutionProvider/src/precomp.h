@@ -17,6 +17,7 @@
 #include <chrono>
 #include <variant>
 #include <cassert>
+#include <format>
 
 #include <wrl/client.h>
 #include <wrl/implements.h>
