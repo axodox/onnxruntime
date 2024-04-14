@@ -85,7 +85,7 @@ namespace Dml
             {
                 ORT_THROW_IF_FAILED(m_provider->AllocatePooledResource(
                     static_cast<size_t>(persistentResourceSize),
-                    AllocatorRoundingMode::Disabled,
+                    AllocatorPoolingMode::Disabled,
                     m_persistentResource.GetAddressOf(),
                     m_persistentResourceAllocatorUnk.GetAddressOf()));
 

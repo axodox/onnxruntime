@@ -22,6 +22,7 @@ namespace Dml
 
     void CommandQueue::ExecuteCommandLists(gsl::span<ID3D12CommandList*> commandLists)
     {
+        OutputDebugString(L"!!! Command list execute\n");
         m_queue->ExecuteCommandLists(gsl::narrow<uint32_t>(commandLists.size()), commandLists.data());
 
         ++m_lastFenceValue;
@@ -89,4 +90,8 @@ namespace Dml
         }
     }
 
+    ID3D12CommandQueue * CommandQueue::Queue() const
+    {
+      return m_queue.Get();
+    }
 } // namespace Dml

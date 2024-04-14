@@ -9,6 +9,7 @@
 #include "ReadbackHeap.h"
 #include "ExecutionContext.h"
 #include "BucketizedBufferAllocator.h"
+#include "TiledBufferAllocator.h"
 #include "MLOperatorAuthorImpl.h"
 #include "core/providers/dml/OperatorAuthorHelper/MLOperatorAuthorHelper.h"
 #include "core/providers/dml/OperatorAuthorHelper/OperatorHelper.h"
@@ -33,6 +34,7 @@
 #endif
 
 #define ENABLE_GRAPH_COMPILATION
+#define DML_USE_TILED_ALLOCATOR
 
 using namespace Windows::AI::MachineLearning::Adapter;
 
@@ -109,7 +111,7 @@ namespace Dml
 
     HRESULT __stdcall ExecutionProviderImpl::AllocatePooledResource(
         size_t size,
-        AllocatorRoundingMode roundingMode,
+        AllocatorPoolingMode poolingMode,
         ID3D12Resource **d3dResource,
         IUnknown** pooledResource
     ) const noexcept
@@ -117,7 +119,7 @@ namespace Dml
         ORT_TRY
         {
         ComPtr<IUnknown> allocation;
-        allocation.Attach(static_cast<IUnknown* >(m_allocator->Alloc(size, roundingMode)));
+        allocation.Attach(static_cast<IUnknown* >(m_allocator->Alloc(size, poolingMode)));
 
         const auto* allocInfo = m_allocator->DecodeDataHandle(allocation.Get());
 
@@ -221,7 +223,12 @@ ExecutionProviderImpl::ExecutionProviderImpl(IDMLDevice* dmlDevice, ID3D12Device
         {
             // Create an allocator for D3D12 buffers used to hold tensor data. The returned buffers from the allocator
             // should be DEFAULT heap buffers which can be used as UAVs, and which start in UAV state.
-            m_allocator = std::make_shared<BucketizedBufferAllocator>(m_d3d12Device.Get(),
+#ifdef DML_USE_TILED_ALLOCATOR
+            m_allocator = std::make_shared<TiledBufferAllocator>(
+#else
+            m_allocator = std::make_shared<BucketizedBufferAllocator>(
+#endif
+                m_d3d12Device.Get(),
                 m_context,  // TODO(leca): REVIEW: Will it cause memory issue when m_context is released in EP while alloc is released in sessionState?
                 CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
                 D3D12_HEAP_FLAG_NONE,
@@ -1171,7 +1178,7 @@ ExecutionProviderImpl::ExecutionProviderImpl(IDMLDevice* dmlDevice, ID3D12Device
 
         // Allocations after this point are potentially transient and their sizes are
         // rounded to enable pooling.
-        m_allocator->SetDefaultRoundingMode(AllocatorRoundingMode::Enabled);
+        m_allocator->SetDefaultRoundingMode(AllocatorPoolingMode::Enabled);
 
         return onnxruntime::common::Status::OK();
     }
@@ -1187,7 +1194,7 @@ ExecutionProviderImpl::ExecutionProviderImpl(IDMLDevice* dmlDevice, ID3D12Device
 
     ID3D12Resource* GetD3D12ResourceFromAllocation(onnxruntime::IAllocator* allocator, void* ptr)
     {
-        Dml::BucketizedBufferAllocator* pAllocationInfo = static_cast<Dml::BucketizedBufferAllocator*>(allocator);
+        Dml::DmlBufferAllocator* pAllocationInfo = static_cast<Dml::DmlBufferAllocator*>(allocator);
         return pAllocationInfo->DecodeDataHandle(ptr)->GetResource();
     }
 

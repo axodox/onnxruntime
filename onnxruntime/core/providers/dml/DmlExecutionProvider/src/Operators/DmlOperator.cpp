@@ -103,7 +103,7 @@ namespace Dml
             {
                 ORT_THROW_IF_FAILED(m_executionProvider->AllocatePooledResource(
                     static_cast<size_t>(persistentResourceSize),
-                    AllocatorRoundingMode::Enabled,
+                    AllocatorPoolingMode::Enabled,
                     m_persistentResource.GetAddressOf(),
                     m_persistentResourcePoolingUnk.GetAddressOf()));
 
@@ -207,7 +207,7 @@ namespace Dml
             {
                 ORT_THROW_IF_FAILED(m_executionProvider->AllocatePooledResource(
                     static_cast<size_t>(persistentResourceSize),
-                    AllocatorRoundingMode::Enabled,
+                    AllocatorPoolingMode::Enabled,
                     m_persistentResource.GetAddressOf(),
                     m_persistentResourcePoolingUnk.GetAddressOf()));
 
@@ -244,7 +244,7 @@ namespace Dml
                 m_persistentResource = nullptr;
                 ORT_THROW_IF_FAILED(m_executionProvider->AllocatePooledResource(
                     static_cast<size_t>(persistentResourceSize),
-                    AllocatorRoundingMode::Enabled,
+                    AllocatorPoolingMode::Enabled,
                     m_persistentResource.GetAddressOf(),
                     m_persistentResourcePoolingUnk.GetAddressOf()));
             }
