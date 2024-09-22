@@ -262,8 +262,8 @@ void RunTest(const TestOptions& opts,
 
 }  // namespace
 
-template <typename AType>
-void TestMatMulNBitsTyped() {
+TEST(MatMulNBits, Float32) {
+  // onnxruntime::profiling::Profiler::Profiler::Instance().StartProfiling<char>("profile.json");
   for (auto M : {1, 2, 100}) {
     for (auto N : {/*2560, */ 1, 2, 32, 288}) {
       for (auto K : {/*2560, */ 16, 32, 64, 128, 256, 1024, 93, 1234}) {
@@ -276,53 +276,30 @@ void TestMatMulNBitsTyped() {
 
             if (base_opts.accuracy_level == 4) {
               base_opts.output_abs_error = 0.1f;
-            } else {
-              if constexpr (std::is_same<AType, MLFloat16>::value) {
-                base_opts.output_abs_error = 0.01f;
-              }
             }
 
             {
               TestOptions opts = base_opts;
-              RunTest<AType>(opts);
+              RunTest<float>(opts);
             }
 
             {
               TestOptions opts = base_opts;
               opts.has_zero_point = true;
-              RunTest<AType>(opts);
+              RunTest<float>(opts);
             }
 
 #if !defined(ORT_NEURAL_SPEED) && !defined(USE_DML)
             {
               TestOptions opts = base_opts;
               opts.has_g_idx = true;
-              RunTest<AType>(opts);
-            }
-
-            {
-              TestOptions opts = base_opts;
-              opts.has_g_idx = true;
-              opts.has_bias = true;
-              if constexpr (std::is_same<AType, float>::value) {
-                if (opts.accuracy_level == 0 || opts.accuracy_level == 1) {
-                  // CI failure (not able to repro on either local machines):
-                  // M:100, N:288, K:1234, block_size:16, accuracy_level:0, has_zero_point:0, zp_is_4bit:1, has_g_idx:1, has_bias:1
-                  // The difference between cur_expected[i] and cur_actual[i] is 1.0401010513305664e-05, which exceeds tolerance,
-                  // tolerance evaluates to 1.006456386676291e-05.
-                  opts.output_abs_error = 0.0001f;
-                }
-              }
-              // only enabled for CPU EP for now
-              std::vector<std::unique_ptr<IExecutionProvider>> explicit_eps;
-              explicit_eps.emplace_back(DefaultCpuExecutionProvider());
-              RunTest<AType>(opts, std::move(explicit_eps));
+              RunTest<float>(opts);
             }
 
             {
               TestOptions opts = base_opts;
               opts.has_zero_point = true, opts.zp_is_4bit = false;
-              RunTest<AType>(opts);
+              RunTest<float>(opts);
             }
 #endif  // !defined(ORT_NEURAL_SPEED) && !defined(USE_DML)
 
@@ -334,7 +311,7 @@ void TestMatMulNBitsTyped() {
               std::vector<std::unique_ptr<IExecutionProvider>> explicit_eps;
               explicit_eps.emplace_back(DefaultCpuExecutionProvider());
 
-              RunTest<AType>(opts, std::move(explicit_eps));
+              RunTest<float>(opts, std::move(explicit_eps));
             }
           }
         }
@@ -342,21 +319,6 @@ void TestMatMulNBitsTyped() {
     }
   }
 }
-
-TEST(MatMulNBits, Float32) {
-  // onnxruntime::profiling::Profiler::Profiler::Instance().StartProfiling<char>("profile.json");
-  TestMatMulNBitsTyped<float>();
-}
-
-#ifdef MLAS_TARGET_AMD64_IX86
-#if !defined(ORT_NEURAL_SPEED) && !defined(USE_DML)
-// Actual and expected difference is over 0.01 with DmlExecutionProvider.
-// Skip the tests instead of raising the tolerance to make is pass.
-TEST(MatMulNBits, Float16) {
-  TestMatMulNBitsTyped<MLFloat16>();
-}
-#endif
-#endif
 
 #if defined(USE_CUDA) || defined(USE_ROCM) || defined(USE_DML)
 
@@ -405,7 +367,7 @@ void RunTest(int64_t M, int64_t N, int64_t K, int64_t block_size, int64_t accura
 }
 }  // namespace
 
-TEST(MatMulNBits, Float16Cuda) {
+TEST(MatMulNBits, Float16) {
 #if defined(USE_CUDA) || defined(USE_ROCM)
   auto has_gidx_options = {true, false};
 #else

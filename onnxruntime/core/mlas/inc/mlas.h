@@ -20,7 +20,6 @@ Abstract:
 #include <cstddef>
 #include <cstdlib>
 #include <cstdint>
-#include <stdexcept>
 
 //
 // Define the calling convention for Windows targets.
@@ -1027,6 +1026,18 @@ MlasComputeTanh(
     );
 
 //
+// Half-precision floating-point routines.
+//
+
+void
+MLASCALL
+MlasConvertHalfToFloatBuffer(
+    const unsigned short* Source,
+    float* Destination,
+    size_t Count
+);
+
+//
 // Transpose routines.
 //
 
@@ -1415,27 +1426,7 @@ using MLAS_FP16 = onnxruntime::MLFloat16;
 
 constexpr size_t FP16_SIZE = sizeof(uint16_t);
 
-//
-// Half-precision floating-point routines.
-//
-
-void
-MLASCALL
-MlasConvertHalfToFloatBuffer(
-    const MLAS_FP16* Source,
-    float* Destination,
-    size_t Count
-);
-
-void
-MLASCALL
-MlasConvertFloatToHalfBuffer(
-const float* Source,
-MLAS_FP16* Destination,
-size_t Count
-);
-
-    /**
+/**
  * @brief Whether current CPU supports FP16 acceleration.
 */
 bool MLASCALL
@@ -1795,7 +1786,6 @@ MlasTranspose(
         reinterpret_cast<uint16_t*>(Output),
         M, N);
 }
-
 
 #ifdef MLAS_F16VEC_INTRINSICS_SUPPORTED
 /**
