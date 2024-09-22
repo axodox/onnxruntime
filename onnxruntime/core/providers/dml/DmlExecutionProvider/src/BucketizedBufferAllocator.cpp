@@ -138,6 +138,11 @@ namespace Dml
         return allocInfo.Detach();
     }
 
+    DmlAllocatorType BucketizedBufferAllocator::Type() const
+    {
+        return DmlAllocatorType::Bucketized;
+    }
+
     void BucketizedBufferAllocator::FreeResource(void* p, uint64_t pooledResourceId)
     {
         AllocationInfo *allocInfo = static_cast<AllocationInfo*>(p);
@@ -183,24 +188,5 @@ namespace Dml
     #endif
 
         // The allocation info is already destructing at this point
-    }
-
-    void BucketizedBufferAllocator::SetResidency(bool value)
-    {
-        m_subAllocator->SetResidency(value);
-
-        if (!value)
-        {
-          for (auto& bucket : m_pool)
-          {
-            for (auto& resource : bucket.resources)
-            {
-              m_context->QueueReference(resource.resource.Get());
-              resource.resource.Reset();
-            }
-          }
-
-          m_pool.clear();
-        }
     }
 } // namespace Dml

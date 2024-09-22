@@ -7,6 +7,7 @@
 #include "core/providers/dml/DmlExecutionProvider/inc/IWinmlExecutionProvider.h"
 #include "core/providers/dml/DmlExecutionProvider/src/IExecutionProvider.h"
 #include "core/providers/dml/DmlExecutionProvider/src/DmlReusedCommandListState.h"
+#include "core/providers/dml/DmlExecutionProvider/src/DmlBufferAllocator.h"
 
 #include <wrl/client.h>
 #include <wrl/implements.h>
@@ -39,7 +40,8 @@ namespace Dml
             bool enableMetacommands,
             bool enableGraphCapture,
             bool enableCpuSyncSpinning,
-            bool disableMemoryArena);
+            bool disableMemoryArena,
+            Dml::DmlAllocatorType preferredAllocatorType);
 
         void ReleaseCompletedReferences();
 
@@ -183,9 +185,6 @@ namespace Dml
         onnxruntime::common::Status OnSessionInitializationEnd();
         std::vector<onnxruntime::AllocatorPtr> CreatePreferredAllocators();
 
-        void Evict();
-        void MakeResident();
-
     private:
         void Initialize(ID3D12CommandQueue* queue, ExecutionProvider& executionProvider);
 
@@ -197,6 +196,8 @@ namespace Dml
 
         void FlushUploadsIfReady() const;
 
+        template <typename T> std::unique_ptr<DmlBufferAllocator> CreateBufferAllocator();
+
         ComPtr<ID3D12Device> m_d3d12Device;
         ComPtr<IDMLDevice> m_dmlDevice;
         bool m_isMcdmDevice = false;
@@ -206,6 +207,7 @@ namespace Dml
         bool m_native16BitShaderOpsSupported = false;
         bool m_graphCaptured = false;
         bool m_graphCaptureEnabled = false;
+        DmlAllocatorType m_allocatorType = DmlAllocatorType::Default;
 
         std::unordered_map<int, std::vector<std::unique_ptr<DmlReusedCommandListState>>> m_capturedGraphs;
         std::unordered_set<int> m_graphCapturingDone;
@@ -266,7 +268,8 @@ namespace Dml
             bool enableMetacommands,
             bool enableGraphCapture,
             bool enableSyncSpinning,
-            bool disableMemoryArena
+            bool disableMemoryArena,
+            Dml::DmlAllocatorType preferredAllocatorType
         );
 
         std::unique_ptr<onnxruntime::IDataTransfer> GetDataTransfer() const final override
@@ -350,20 +353,6 @@ namespace Dml
         {
             return m_impl->ReplayGraph(graph_annotation_id);
         }
-
-        virtual Status MakeResident()
-        {
-            m_impl->MakeResident();
-            m_impl->WaitForOutstandingWork();
-            return Status::OK();
-        };
-
-        virtual Status Evict()
-        {
-            m_impl->WaitForOutstandingWork();
-            m_impl->Evict();
-            return Status::OK();
-        };
 
     private:
         ComPtr<ExecutionProviderImpl> m_impl;
