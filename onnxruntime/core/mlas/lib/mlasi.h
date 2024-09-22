@@ -610,16 +610,10 @@ void
     size_t N
     );
 
-typedef
+typedef 
 void(MLASCALL MLAS_CAST_F16_TO_F32_KERNEL)(
     const unsigned short* Source,
     float* Destination,
-    size_t Count
-);
-
-typedef void(MLASCALL MLAS_CAST_F32_TO_F16_KERNEL)(
-    const float* Source,
-    unsigned short* Destination,
     size_t Count
 );
 
@@ -889,8 +883,6 @@ extern "C" {
 #if defined(MLAS_TARGET_AMD64)
     MLAS_CAST_F16_TO_F32_KERNEL MlasCastF16ToF32KernelSse;
     MLAS_CAST_F16_TO_F32_KERNEL MlasCastF16ToF32KernelAvx;
-    MLAS_CAST_F16_TO_F32_KERNEL MlasCastF16ToF32KernelAvx2;
-    MLAS_CAST_F32_TO_F16_KERNEL MlasCastF32ToF16KernelAvx2;
 #endif
 
 }
@@ -1183,7 +1175,6 @@ struct MLAS_PLATFORM {
     const MLAS_SQNBIT_GEMM_DISPATCH* SQNBitGemmDispatch{nullptr};
 
     MLAS_CAST_F16_TO_F32_KERNEL* CastF16ToF32Kernel;
-    MLAS_CAST_F32_TO_F16_KERNEL* CastF32ToF16Kernel;
 };
 
 inline
