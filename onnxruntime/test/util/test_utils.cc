@@ -38,6 +38,10 @@ void VerifyOutput(const std::string& output_name,
       EXPECT_TRUE(SpanEq(expected_tensor.DataAsSpan<int64_t>(), tensor.DataAsSpan<int64_t>()))
           << " mismatch for " << output_name;
       break;
+    case ONNX_NAMESPACE::TensorProto_DataType_UINT16:
+      EXPECT_TRUE(SpanEq(expected_tensor.DataAsSpan<uint16_t>(), tensor.DataAsSpan<uint16_t>()))
+          << " mismatch for " << output_name;
+      break;
     case ONNX_NAMESPACE::TensorProto_DataType_UINT8:
       EXPECT_TRUE(SpanEq(expected_tensor.DataAsSpan<uint8_t>(), tensor.DataAsSpan<uint8_t>()))
           << " mismatch for " << output_name;
@@ -233,7 +237,7 @@ void CheckShapeEquality(const ONNX_NAMESPACE::TensorShapeProto* shape1,
 #if !defined(DISABLE_SPARSE_TENSORS)
 void SparseIndicesChecker(const ONNX_NAMESPACE::TensorProto& indices_proto, gsl::span<const int64_t> expected_indicies) {
   using namespace ONNX_NAMESPACE;
-  Path model_path;
+  std::filesystem::path model_path;
   std::vector<uint8_t> unpack_buffer;
   gsl::span<const int64_t> ind_span;
   std::vector<int64_t> converted_indices;

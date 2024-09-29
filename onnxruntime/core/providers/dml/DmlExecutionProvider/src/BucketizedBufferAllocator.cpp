@@ -11,14 +11,6 @@
 
 namespace Dml
 {
-    AllocationInfo::~AllocationInfo()
-    {
-        if (m_owner)
-        {
-            m_owner->FreeResource(this, m_pooledResourceId);
-        }
-    }
-
     BucketizedBufferAllocator::~BucketizedBufferAllocator()
     {
 #ifdef PRINT_OUTSTANDING_ALLOCATIONS
@@ -36,14 +28,14 @@ namespace Dml
 
     BucketizedBufferAllocator::BucketizedBufferAllocator(
         ID3D12Device* device,
-        std::shared_ptr<ExecutionContext> context,
+        ExecutionContext* context,
         const D3D12_HEAP_PROPERTIES& heapProps,
         D3D12_HEAP_FLAGS heapFlags,
         D3D12_RESOURCE_FLAGS resourceFlags,
         D3D12_RESOURCE_STATES initialState,
         std::unique_ptr<DmlSubAllocator>&& subAllocator
         )
-        : onnxruntime::IAllocator(
+        : DmlBufferAllocator(
             OrtMemoryInfo(
                 "DML",
                 OrtAllocatorType::OrtDeviceAllocator,
@@ -80,12 +72,7 @@ namespace Dml
         return (1ull << (index + c_minResourceSizeExponent));
     }
 
-    void* BucketizedBufferAllocator::Alloc(size_t size)
-    {
-        return Alloc(size, m_defaultRoundingMode);
-    }
-
-    void* BucketizedBufferAllocator::Alloc(size_t size, AllocatorRoundingMode roundingMode)
+    void* BucketizedBufferAllocator::Alloc(size_t size, AllocatorPoolingMode poolingMode)
     {
         // For some reason lotus likes requesting 0 bytes of memory
         size = std::max<size_t>(1, size);
@@ -95,7 +82,7 @@ namespace Dml
         uint64_t bucketSize = 0;
 
         // Use a pooled resource if the size (post rounding, if requested) matches a bucket size
-        if (roundingMode == AllocatorRoundingMode::Enabled || size == GetBucketSizeFromIndex(GetBucketIndexFromSize(size)))
+        if (poolingMode == AllocatorPoolingMode::Enabled || size == GetBucketSizeFromIndex(GetBucketIndexFromSize(size)))
         {
             Bucket* bucket = nullptr;
 
@@ -151,13 +138,9 @@ namespace Dml
         return allocInfo.Detach();
     }
 
-    void BucketizedBufferAllocator::Free(void* p)
+    DmlAllocatorType BucketizedBufferAllocator::Type() const
     {
-        // Release Lotus's reference on the allocation.  The allocation
-        // also inherits IUnknown, and once its final reference reaches zero
-        // it will call FreeResource
-        ComPtr<AllocationInfo> allocInfo;
-        allocInfo.Attach(static_cast<AllocationInfo*>(p));
+        return DmlAllocatorType::Bucketized;
     }
 
     void BucketizedBufferAllocator::FreeResource(void* p, uint64_t pooledResourceId)
@@ -186,12 +169,16 @@ namespace Dml
         }
         else
         {
-            // Free the underlying allocation once queued work has completed.
-#ifdef _GAMING_XBOX
-            m_context->QueueReference(WRAP_GRAPHICS_UNKNOWN(allocInfo->GetResource()).Get());
-#else
-            m_context->QueueReference(allocInfo->GetResource());
-#endif
+            if (!m_context->IsClosed())
+            {
+                // Free the underlying allocation once queued work has completed.
+    #ifdef _GAMING_XBOX
+                m_context->QueueReference(WRAP_GRAPHICS_UNKNOWN(allocInfo->GetResource()).Get());
+    #else
+                m_context->QueueReference(allocInfo->GetResource());
+    #endif
+            }
+
             allocInfo->DetachResourceWrapper();
         }
 
@@ -202,50 +189,4 @@ namespace Dml
 
         // The allocation info is already destructing at this point
     }
-
-
-    const AllocationInfo* BucketizedBufferAllocator::DecodeDataHandle(const void* opaqueHandle)
-    {
-        if (opaqueHandle == nullptr)
-        {
-            // There is no memory allocated which needs to be decoded.
-            ORT_THROW_HR(E_INVALIDARG);
-        }
-        const auto* allocInfo = static_cast<const AllocationInfo*>(opaqueHandle);
-        return allocInfo;
-    }
-
-    void BucketizedBufferAllocator::SetDefaultRoundingMode(AllocatorRoundingMode roundingMode)
-    {
-        m_defaultRoundingMode = roundingMode;
-    }
-
-    void BucketizedBufferAllocator::SetResidency(bool value)
-    {
-        m_subAllocator->SetResidency(value);
-    }
-
-    CPUAllocator::CPUAllocator(OrtMemType memType)
-        : onnxruntime::IAllocator(
-            OrtMemoryInfo(
-                "DML CPU",
-                OrtAllocatorType::OrtDeviceAllocator,
-                OrtDevice(OrtDevice::CPU, OrtDevice::MemType::DEFAULT, 0),
-                0,
-                memType
-            )
-        )
-    {
-    }
-
-    void* CPUAllocator::Alloc(size_t size)
-    {
-        return onnxruntime::AllocatorDefaultAlloc(size);
-    }
-
-    void CPUAllocator::Free(void* p)
-    {
-        return onnxruntime::AllocatorDefaultFree(p);
-    }
-
 } // namespace Dml

@@ -10,6 +10,7 @@ interface ID3D12Resource;
 #include "core/common/status.h"
 #include "core/framework/data_transfer.h"
 #include "IWinmlExecutionProvider.h"
+#include "core/providers/dml/DmlExecutionProvider/src/ExecutionContext.h"
 
 namespace onnxruntime
 {
@@ -20,7 +21,7 @@ namespace onnxruntime
     class KernelRegistry;
 }
 
-enum class AllocatorRoundingMode
+enum class AllocatorPoolingMode
 {
     Disabled = 0,
     Enabled = 1,
@@ -28,11 +29,21 @@ enum class AllocatorRoundingMode
 
 namespace Dml
 {
+    enum class DmlAllocatorType
+    {
+        Default = 0,
+        Bucketized,
+        Tiled
+    };
+
     std::unique_ptr<onnxruntime::IExecutionProvider> CreateExecutionProvider(
         IDMLDevice* dmlDevice,
-        ID3D12CommandQueue* commandQueue,
+        Dml::ExecutionContext* execution_context,
         bool enableMetacommands,
-        bool enableDynamicGraphFusion);
+        bool enableGraphCapture,
+        bool enableCpuSyncSpinning,
+        bool disableMemoryArena,
+        Dml::DmlAllocatorType preferredAllocatorType);
 
     ID3D12Resource* GetD3D12ResourceFromAllocation(onnxruntime::IAllocator* allocator, void* ptr);
     void FlushContext(onnxruntime::IExecutionProvider* provider);

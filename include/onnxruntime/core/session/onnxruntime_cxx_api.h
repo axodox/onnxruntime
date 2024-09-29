@@ -873,6 +873,9 @@ struct SessionOptionsImpl : ConstSessionOptionsImpl<T> {
 
   SessionOptionsImpl& AddInitializer(const char* name, const OrtValue* ort_val);                                             ///< Wraps OrtApi::AddInitializer
   SessionOptionsImpl& AddExternalInitializers(const std::vector<std::string>& names, const std::vector<Value>& ort_values);  ///< Wraps OrtApi::AddExternalInitializers
+  SessionOptionsImpl& AddExternalInitializersFromFilesInMemory(const std::vector<std::basic_string<ORTCHAR_T>>& external_initializer_file_names,
+                                                               const std::vector<char*>& external_initializer_file_buffer_array,
+                                                               const std::vector<size_t>& external_initializer_file_lengths);  ///< Wraps OrtApi::AddExternalInitializersFromFilesInMemory
 
   SessionOptionsImpl& AppendExecutionProvider_CUDA(const OrtCUDAProviderOptions& provider_options);          ///< Wraps OrtApi::SessionOptionsAppendExecutionProvider_CUDA
   SessionOptionsImpl& AppendExecutionProvider_CUDA_V2(const OrtCUDAProviderOptionsV2& provider_options);     ///< Wraps OrtApi::SessionOptionsAppendExecutionProvider_CUDA_V2
@@ -1123,8 +1126,6 @@ struct Session : detail::SessionImpl<OrtSession> {
 
   ConstSession GetConst() const { return ConstSession{this->p_}; }
   UnownedSession GetUnowned() const { return UnownedSession{this->p_}; }
-
-  void Evict(); ///< Wraps OrtApi::EvictSession
 };
 
 namespace detail {
@@ -2174,8 +2175,8 @@ struct Op : detail::Base<OrtOp> {
 /// </summary>
 struct ShapeInferContext {
   struct SymbolicInteger {
-    SymbolicInteger(int64_t i) : i_(i), is_int_(true){};
-    SymbolicInteger(const char* s) : s_(s), is_int_(false){};
+    SymbolicInteger(int64_t i) : i_(i), is_int_(true) {};
+    SymbolicInteger(const char* s) : s_(s), is_int_(false) {};
     SymbolicInteger(const SymbolicInteger&) = default;
     SymbolicInteger(SymbolicInteger&&) = default;
 
@@ -2215,7 +2216,7 @@ struct ShapeInferContext {
 
   size_t GetInputCount() const { return input_shapes_.size(); }
 
-  Status SetOutputShape(size_t indice, const Shape& shape);
+  Status SetOutputShape(size_t indice, const Shape& shape, ONNXTensorElementDataType type = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
 
   int64_t GetAttrInt(const char* attr_name);
 

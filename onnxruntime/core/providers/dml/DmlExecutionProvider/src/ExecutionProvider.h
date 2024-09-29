@@ -6,6 +6,8 @@
 #include "GraphTransformer.h"
 #include "core/providers/dml/DmlExecutionProvider/inc/IWinmlExecutionProvider.h"
 #include "core/providers/dml/DmlExecutionProvider/src/IExecutionProvider.h"
+#include "core/providers/dml/DmlExecutionProvider/src/DmlReusedCommandListState.h"
+#include "core/providers/dml/DmlExecutionProvider/src/DmlBufferAllocator.h"
 
 #include <wrl/client.h>
 #include <wrl/implements.h>
@@ -23,7 +25,7 @@ namespace Dml
     class PooledUploadHeap;
     class ReadbackHeap;
     class ExecutionContext;
-    class BucketizedBufferAllocator;
+    class DmlBufferAllocator;
     class CPUAllocator;
     class ExecutionProvider;
 
@@ -34,9 +36,12 @@ namespace Dml
         ExecutionProviderImpl(
             IDMLDevice* dmlDevice,
             ID3D12Device* d3d12Device,
-            ID3D12CommandQueue* queue,
+            Dml::ExecutionContext* executionContext,
             bool enableMetacommands,
-            bool enableDynamicGraphFusion);
+            bool enableGraphCapture,
+            bool enableCpuSyncSpinning,
+            bool disableMemoryArena,
+            Dml::DmlAllocatorType preferredAllocatorType);
 
         void ReleaseCompletedReferences();
 
@@ -137,7 +142,7 @@ namespace Dml
         // Allocate a resource from pools.  Releasing pooledResource returns it to the pool.
         STDMETHOD(AllocatePooledResource)(
             size_t size,
-            AllocatorRoundingMode roundingMode,
+            AllocatorPoolingMode poolingMode,
             ID3D12Resource **d3dResource,
             IUnknown* *pooledResource
         ) const noexcept final;
@@ -153,7 +158,14 @@ namespace Dml
         STDMETHOD_(bool, CustomHeapsSupported)() const noexcept final;
 
         STDMETHOD_(bool, MetacommandsEnabled)() const noexcept final;
-        bool DynamicGraphFusionEnabled() const noexcept;
+        bool GraphCaptureEnabled() const noexcept;
+        bool GraphCaptured(int graph_annotation_id) const;
+        Status ReplayGraph(int graph_annotation_id);
+        Status OnRunStart(const onnxruntime::RunOptions& run_options);
+        Status OnRunEnd();
+        int GetCurrentGraphAnnotationId() const { return m_currentGraphAnnotationId; }
+        void AppendCapturedGraph(int annotationId, std::unique_ptr<DmlReusedCommandListState> capturedGraph);
+        bool CpuSyncSpinningEnabled() const noexcept;
         std::shared_ptr<onnxruntime::IAllocator> GetGpuAllocator();
         std::shared_ptr<onnxruntime::IAllocator> GetCpuInputAllocator();
 
@@ -173,9 +185,6 @@ namespace Dml
         onnxruntime::common::Status OnSessionInitializationEnd();
         std::vector<onnxruntime::AllocatorPtr> CreatePreferredAllocators();
 
-        void Evict();
-        void MakeResident();
-
     private:
         void Initialize(ID3D12CommandQueue* queue, ExecutionProvider& executionProvider);
 
@@ -187,18 +196,29 @@ namespace Dml
 
         void FlushUploadsIfReady() const;
 
+        template <typename T> std::unique_ptr<DmlBufferAllocator> CreateBufferAllocator();
+
         ComPtr<ID3D12Device> m_d3d12Device;
         ComPtr<IDMLDevice> m_dmlDevice;
         bool m_isMcdmDevice = false;
         bool m_areCustomHeapsSupported = false;
         bool m_areMetacommandsEnabled = true;
-        bool m_dynamicGraphFusionEnabled = false;
+        int m_currentGraphAnnotationId = 0;
         bool m_native16BitShaderOpsSupported = false;
-        std::shared_ptr<ExecutionContext> m_context;
+        bool m_graphCaptured = false;
+        bool m_graphCaptureEnabled = false;
+        DmlAllocatorType m_allocatorType = DmlAllocatorType::Default;
+
+        std::unordered_map<int, std::vector<std::unique_ptr<DmlReusedCommandListState>>> m_capturedGraphs;
+        std::unordered_set<int> m_graphCapturingDone;
+        bool m_sessionInitialized = false;
+        bool m_cpuSyncSpinningEnabled = false;
+        bool m_memoryArenaDisabled = false;
+        ComPtr<ExecutionContext> m_context;
         std::unique_ptr<PooledUploadHeap> m_uploadHeap;
         std::unique_ptr<ReadbackHeap> m_readbackHeap;
-        std::shared_ptr<BucketizedBufferAllocator> m_allocator;
-        std::shared_ptr<CPUAllocator> m_cpuInputAllocator;
+        std::shared_ptr<DmlBufferAllocator> m_allocator;
+        std::shared_ptr<onnxruntime::CPUAllocator> m_cpuInputAllocator;
         std::shared_ptr<onnxruntime::KernelRegistry> m_kernelRegistry;
         std::shared_ptr<const Windows::AI::MachineLearning::Adapter::InternalRegistrationInfoMap> m_internalRegInfoMap;
         mutable uint64_t m_partitionKernelPrefixVal = 0;
@@ -244,9 +264,12 @@ namespace Dml
 
         explicit ExecutionProvider(
             IDMLDevice* dmlDevice,
-            ID3D12CommandQueue* commandQueue,
+            Dml::ExecutionContext* executionContext,
             bool enableMetacommands,
-            bool enableDynamicGraphFusion
+            bool enableGraphCapture,
+            bool enableSyncSpinning,
+            bool disableMemoryArena,
+            Dml::DmlAllocatorType preferredAllocatorType
         );
 
         std::unique_ptr<onnxruntime::IDataTransfer> GetDataTransfer() const final override
@@ -281,12 +304,14 @@ namespace Dml
             return Status::OK();
         }
 
-        onnxruntime::Status OnRunEnd(bool /*sync_stream*/, const onnxruntime::RunOptions& /*run_options*/) final override
+        Status OnRunStart(const onnxruntime::RunOptions& run_options) final
         {
-            // Flush any pending work to the GPU, but don't block for completion, permitting it
-            // to overlap other work.
-            m_impl->Flush();
-            return Status::OK();
+            return m_impl->OnRunStart(run_options);
+        }
+
+        Status OnRunEnd(bool /*sync_stream*/, const onnxruntime::RunOptions& /*run_options*/) final
+        {
+            return m_impl->OnRunEnd();
         }
 
         void Flush()
@@ -309,29 +334,25 @@ namespace Dml
             return m_impl.Get();
         }
 
-        bool DynamicGraphFusionEnabled() const
-        {
-            return m_impl->DynamicGraphFusionEnabled();
-        }
-
         virtual std::vector<onnxruntime::AllocatorPtr> CreatePreferredAllocators() override
         {
             return m_impl->CreatePreferredAllocators();
         }
 
-        virtual Status MakeResident()
+        bool IsGraphCaptureEnabled() const override
         {
-            m_impl->MakeResident();
-            m_impl->WaitForOutstandingWork();
-            return Status::OK();
-        };
+            return m_impl->GraphCaptureEnabled();
+        }
 
-        virtual Status Evict()
+        bool IsGraphCaptured(int graph_annotation_id) const override
         {
-            m_impl->WaitForOutstandingWork();
-            m_impl->Evict();
-            return Status::OK();
-        };
+            return m_impl->GraphCaptured(graph_annotation_id);
+        }
+
+        Status ReplayGraph(int graph_annotation_id) override
+        {
+            return m_impl->ReplayGraph(graph_annotation_id);
+        }
 
     private:
         ComPtr<ExecutionProviderImpl> m_impl;
